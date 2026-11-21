@@ -1,0 +1,4 @@
+.render_frames/
+*.mp4
+capture-test-*.jpg
+__pycache__/
