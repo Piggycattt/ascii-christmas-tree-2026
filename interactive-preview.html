@@ -1,0 +1,961 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <meta name="theme-color" content="#02050f" />
+  <title>3D ASCII Christmas Tree</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #fff5c7;
+      --muted: rgba(220, 235, 255, 0.62);
+      --panel: rgba(4, 9, 22, 0.72);
+      --border: rgba(255, 222, 118, 0.24);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #02050f;
+      font-family: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+    body {
+      display: grid;
+      place-items: center;
+    }
+    #stage {
+      position: relative;
+      width: min(100vw, 56.25vh);
+      height: min(177.7778vw, 100vh);
+      overflow: hidden;
+      background: #02050f;
+      box-shadow: 0 0 90px rgba(22, 93, 104, 0.24);
+      user-select: none;
+      touch-action: none;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: #02050f;
+      cursor: grab;
+    }
+    canvas:active { cursor: grabbing; }
+    #controls {
+      position: absolute;
+      left: 50%;
+      bottom: 18px;
+      z-index: 4;
+      display: flex;
+      gap: 8px;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      transform: translateX(-50%);
+      opacity: 0;
+      transition: opacity .25s ease;
+    }
+    #stage:hover #controls,
+    #controls:focus-within { opacity: 1; }
+    button {
+      min-height: 42px;
+      padding: 0 14px;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 999px;
+      background: rgba(255,255,255,.07);
+      color: var(--ink);
+      font: 700 11px/1 "Cascadia Mono", Consolas, monospace;
+      letter-spacing: .14em;
+      cursor: pointer;
+    }
+    button:hover, button:focus-visible {
+      outline: none;
+      border-color: rgba(255, 222, 118, .58);
+      background: rgba(255, 222, 118, .12);
+    }
+    #hint {
+      position: absolute;
+      top: 16px;
+      left: 50%;
+      z-index: 3;
+      padding: 7px 11px;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(2,5,15,.48);
+      font: 600 10px/1 "Cascadia Mono", Consolas, monospace;
+      letter-spacing: .12em;
+      transform: translateX(-50%);
+      opacity: .78;
+      pointer-events: none;
+      transition: opacity 1s ease;
+      white-space: nowrap;
+    }
+    .export #controls,
+    .export #hint { display: none !important; }
+    @media (prefers-reduced-motion: reduce) {
+      #hint { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main id="stage" aria-label="3D ASCII Christmas tree animation">
+    <canvas id="art" width="1080" height="1920"></canvas>
+    <div id="hint">DRAG TO ORBIT // SPACE TO PAUSE // R TO REPLAY</div>
+    <div id="controls" aria-label="Animation controls">
+      <button id="replay" type="button">REPLAY</button>
+      <button id="pause" type="button">PAUSE</button>
+      <button id="save" type="button">SAVE PNG</button>
+    </div>
+  </main>
+
+<script>
+"use strict";
+
+/* ================================================================
+   BEGINNER-FRIENDLY SETTINGS
+   Change the values in CONFIG, save this file, then refresh.
+   Every visible tree, star and gift shape is made from ASCII glyphs.
+   ================================================================ */
+const CONFIG = {
+  width: 1080,
+  height: 1920,
+  fps: 30,
+  duration: 20,
+  seed: 20261225,
+  rotationSpeed: 0.34,
+  treeHeight: 1280,
+  treeRadius: 575,
+  greeting: "MERRY CHRISTMAS 2026",
+  dedication: "TO THE ONE I WANT TO SPEND CHRISTMAS WITH",
+  backgroundTop: "#02040d",
+  backgroundBottom: "#07162a",
+  treeGlyphs: "MERRYCHRISTMASABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+*<>/\\|#@",
+  lightGlyphs: "*+o.",
+  snowGlyphs: "*+.'",
+  fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace'
+};
+
+const TAU = Math.PI * 2;
+const W = CONFIG.width;
+const H = CONFIG.height;
+const BASE_Y = -515;
+const TREE_TOP = BASE_Y + CONFIG.treeHeight;
+const params = new URLSearchParams(location.search);
+const exportMode = params.has("export");
+if (exportMode) document.documentElement.classList.add("export");
+const RENDER_SCALE = exportMode ? 1 : 0.5;
+const SCENE_STRIDE = exportMode ? 1 : 3;
+const SNOW_STRIDE = exportMode ? 1 : 2;
+
+const canvas = document.getElementById("art");
+const ctx = canvas.getContext("2d", { alpha: false, desynchronized: false });
+canvas.width = W * RENDER_SCALE;
+canvas.height = H * RENDER_SCALE;
+ctx.textAlign = "center";
+ctx.textBaseline = "middle";
+
+// One half-resolution glow buffer replaces thousands of expensive
+// per-character shadowBlur operations.
+const glowCanvas = document.createElement("canvas");
+glowCanvas.width = W / 2 * RENDER_SCALE;
+glowCanvas.height = H / 2 * RENDER_SCALE;
+const glowCtx = glowCanvas.getContext("2d", { alpha: true });
+glowCtx.textAlign = "center";
+glowCtx.textBaseline = "middle";
+
+function mulberry32(seed) {
+  return function () {
+    let t = seed += 0x6D2B79F5;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const random = mulberry32(CONFIG.seed);
+const rand = (a = 1, b = 0) => b + (a - b) * random();
+const choose = (s) => s[Math.floor(random() * s.length)];
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const smoothstep = (v) => { v = clamp(v); return v * v * (3 - 2 * v); };
+const easeOutBack = (v) => {
+  v = clamp(v);
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(v - 1, 3) + c1 * Math.pow(v - 1, 2);
+};
+const wrap = (v, max) => ((v % max) + max) % max;
+const hsla = (h, s, l, a = 1) => `hsla(${wrap(h, 360).toFixed(1)},${s.toFixed(1)}%,${l.toFixed(1)}%,${a.toFixed(3)})`;
+
+const scene = [];
+const snow = [];
+const finaleSparks = [];
+const GLYPH_CELL = 48;
+const GLYPH_BASE_SIZE = 34;
+const GLYPH_ATLAS_COLS = 64;
+let glyphAtlas;
+
+function addPoint(p) {
+  scene.push({
+    x: 0, y: 0, z: 0,
+    glyph: "+",
+    hue: 130, sat: 70, light: 55,
+    size: 17, alpha: 1, glow: 0,
+    phase: rand(TAU), twinkle: rand(0.7, 1.7),
+    spin: 1, offset: 0,
+    reveal: 0, revealDuration: 0.7,
+    entry: "grow", kind: "tree",
+    ox: 0, oy: BASE_Y, oz: 0,
+    ...p
+  });
+}
+
+function makeTree() {
+  const greens = [112, 126, 139, 151, 164, 176];
+  const ornamentHues = [4, 21, 42, 190, 216, 292, 330];
+
+  // Dense conical body: an outer shell plus translucent interior branches.
+  for (let i = 0; i < 1350; i++) {
+    const u = Math.pow(random(), 0.92);
+    const y = BASE_Y + 70 + u * (CONFIG.treeHeight - 120);
+    const tier = Math.min(8, Math.floor(u * 9));
+    const scallop = 0.88 + 0.12 * Math.cos(u * Math.PI * 18 + 0.35);
+    const radiusMax = Math.pow(1 - u, 0.66) * CONFIG.treeRadius * scallop + 10;
+    const shell = random() < 0.69;
+    const radial = shell ? rand(1, 0.72) : Math.sqrt(random()) * 0.74;
+    const theta = rand(TAU);
+    const radius = radiusMax * radial;
+    const ornament = random() < (shell ? 0.085 : 0.035);
+    const hue = ornament ? choose(ornamentHues) : choose(greens) + rand(8, -8);
+    const light = ornament ? rand(73, 58) : rand(63, 31) + (shell ? 5 : -2);
+    addPoint({
+      x: Math.cos(theta) * radius,
+      y,
+      z: Math.sin(theta) * radius,
+      glyph: ornament ? choose("oO@*+") : choose(CONFIG.treeGlyphs),
+      hue,
+      sat: ornament ? rand(98, 78) : rand(91, 56),
+      light,
+      size: ornament ? rand(20, 15) : rand(17.5, 13),
+      glow: ornament ? rand(15, 7) : (shell ? 2 : 0),
+      alpha: shell ? rand(1, 0.78) : rand(0.73, 0.38),
+      spin: 0.88 + tier * 0.031 + (tier % 2 ? 0.045 : -0.025),
+      offset: tier * 0.025,
+      reveal: 0.75 + u * 4.25 + rand(0.22),
+      revealDuration: rand(0.75, 0.38),
+      kind: ornament ? "ornament" : "tree"
+    });
+  }
+
+  // Layered radial branch fans make the rotation read as a true 3D tree.
+  for (let tier = 0; tier < 10; tier++) {
+    const u = tier / 10;
+    const y0 = BASE_Y + 105 + tier * 105;
+    const tierRadius = Math.pow(1 - u, 0.67) * CONFIG.treeRadius * 1.02;
+    const armCount = 9 + (tier % 3);
+    for (let arm = 0; arm < armCount; arm++) {
+      const theta = arm / armCount * TAU + rand(0.16, -0.16);
+      const length = tierRadius * rand(1.04, 0.82);
+      const steps = Math.max(6, Math.floor(length / 42));
+      for (let k = 1; k <= steps; k++) {
+        const f = k / steps;
+        const radius = length * f;
+        const droop = Math.pow(f, 1.7) * rand(54, 25);
+        addPoint({
+          x: Math.cos(theta) * radius,
+          y: y0 - droop + Math.sin(f * Math.PI) * 9,
+          z: Math.sin(theta) * radius,
+          glyph: choose("/\\<>YVWM+*"),
+          hue: choose([112, 126, 142, 157]) + rand(6, -6),
+          sat: rand(90, 61),
+          light: rand(64, 37),
+          size: rand(18, 14),
+          alpha: rand(0.98, 0.68),
+          glow: random() < 0.08 ? 5 : 0,
+          spin: 0.86 + tier * 0.035 + (tier % 2 ? 0.055 : -0.02),
+          reveal: 0.8 + ((y0 - BASE_Y) / CONFIG.treeHeight) * 4.15 + f * 0.22,
+          revealDuration: 0.55,
+          kind: "branch"
+        });
+      }
+    }
+  }
+}
+
+function makeTrunkAndRoots() {
+  const trunkTop = BASE_Y + 255;
+  for (let yi = 0; yi <= 15; yi++) {
+    const y = BASE_Y + yi / 15 * (trunkTop - BASE_Y);
+    for (let a = 0; a < 16; a++) {
+      const theta = a / 16 * TAU;
+      const r = 67 + 8 * Math.sin(yi * 0.8 + a);
+      addPoint({
+        x: Math.cos(theta) * r,
+        y,
+        z: Math.sin(theta) * r,
+        glyph: choose("|IH#MW"),
+        hue: rand(41, 26), sat: rand(89, 62), light: rand(66, 38),
+        size: rand(21, 16), alpha: 1, glow: 4,
+        spin: 1, reveal: 0.25 + yi * 0.025, revealDuration: 0.55,
+        kind: "trunk"
+      });
+    }
+  }
+
+  for (let root = 0; root < 14; root++) {
+    const theta = root / 14 * TAU + rand(0.16, -0.16);
+    const length = rand(370, 220);
+    const steps = Math.floor(length / 19);
+    for (let i = 0; i <= steps; i++) {
+      const f = i / steps;
+      const curve = Math.sin(f * Math.PI) * rand(18, 5);
+      addPoint({
+        x: Math.cos(theta) * length * f + Math.cos(theta + Math.PI / 2) * curve,
+        y: BASE_Y - 3 - f * rand(16, 5),
+        z: Math.sin(theta) * length * f + Math.sin(theta + Math.PI / 2) * curve,
+        glyph: choose("_/\\=-+"),
+        hue: rand(45, 28), sat: rand(90, 62), light: rand(68, 40),
+        size: rand(21, 16), alpha: 1, glow: 5,
+        spin: 1, reveal: 0.35 + f * 1.25, revealDuration: 0.38,
+        entry: "root", kind: "root"
+      });
+    }
+  }
+}
+
+function makeSpiral() {
+  const count = 235;
+  for (let i = 0; i < count; i++) {
+    const u = i / (count - 1);
+    const y = BASE_Y + 145 + u * (CONFIG.treeHeight - 235);
+    const radius = Math.pow(1 - u, 0.67) * CONFIG.treeRadius * 1.055 + 18;
+    const theta = u * TAU * 5.45 + 0.5;
+    for (let layer = 0; layer < 2; layer++) {
+      const spread = layer ? 10 : -5;
+      addPoint({
+        x: Math.cos(theta) * (radius + spread),
+        y: y + (layer ? 5 : -3),
+        z: Math.sin(theta) * (radius + spread),
+        glyph: choose(CONFIG.lightGlyphs),
+        hue: rand(49, 37), sat: rand(100, 88), light: rand(83, 66),
+        size: layer ? rand(19, 15) : rand(22, 17),
+        alpha: layer ? 0.82 : 1,
+        glow: layer ? 20 : 30,
+        spin: 1.0,
+        reveal: 5.0 + u * 2.45,
+        revealDuration: 0.34,
+        entry: "fade",
+        kind: "light",
+        phase: u * 19 + layer,
+        twinkle: rand(2.3, 1.4)
+      });
+    }
+
+    // Red ASCII bulbs hang from the golden spiral. Each one is an extruded
+    // character cluster, so it keeps 3D thickness while the tree rotates.
+    if (i % 16 === 6 && u > 0.07 && u < 0.95) {
+      const nx = Math.cos(theta), nz = Math.sin(theta);
+      const tx = -Math.sin(theta), tz = Math.cos(theta);
+      const bulbRadius = radius + 15;
+      const bulbY = y - 27;
+      const bulbReveal = 5.15 + u * 2.45;
+
+      addPoint({
+        x: nx * (radius + 5), y: y - 8, z: nz * (radius + 5),
+        glyph: "|", hue: 43, sat: 98, light: 82,
+        size: 17, alpha: 1, glow: 15, spin: 1,
+        reveal: bulbReveal - 0.12, revealDuration: 0.3,
+        entry: "fade", kind: "light", twinkle: 2.1
+      });
+
+      for (let b = 0; b < 9; b++) {
+        const a = b / 9 * TAU;
+        const tangentOffset = Math.cos(a) * 13;
+        const verticalOffset = Math.sin(a) * 14;
+        const depthOffset = b % 2 ? 7 : -7;
+        addPoint({
+          x: nx * (bulbRadius + depthOffset) + tx * tangentOffset,
+          y: bulbY + verticalOffset,
+          z: nz * (bulbRadius + depthOffset) + tz * tangentOffset,
+          glyph: b % 3 === 0 ? "O" : choose("o@0"),
+          hue: rand(8, -3), sat: rand(100, 91), light: rand(72, 52),
+          size: rand(24, 19), alpha: 1, glow: rand(22, 14),
+          spin: 1, reveal: bulbReveal + b * 0.018,
+          revealDuration: 0.42, entry: "fade", kind: "red-bulb",
+          phase: u * 23 + b * 0.7, twinkle: rand(3.0, 1.8)
+        });
+      }
+
+      addPoint({
+        x: nx * (bulbRadius + 7) - tx * 5,
+        y: bulbY + 7,
+        z: nz * (bulbRadius + 7) - tz * 5,
+        glyph: "*", hue: 12, sat: 90, light: 94,
+        size: 14, alpha: 1, glow: 24, spin: 1,
+        reveal: bulbReveal + 0.2, revealDuration: 0.35,
+        entry: "fade", kind: "red-bulb", twinkle: 3.4
+      });
+    }
+  }
+}
+
+function starVertices(cx, cy, outer, inner) {
+  const pts = [];
+  for (let i = 0; i < 10; i++) {
+    const angle = -Math.PI / 2 + i * Math.PI / 5;
+    const r = i % 2 === 0 ? outer : inner;
+    pts.push([cx + Math.cos(angle) * r, cy + Math.sin(angle) * r]);
+  }
+  return pts;
+}
+function insidePolygon(x, y, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i][0], yi = polygon[i][1];
+    const xj = polygon[j][0], yj = polygon[j][1];
+    const intersect = ((yi > y) !== (yj > y)) &&
+      (x < (xj - xi) * (y - yi) / ((yj - yi) || 1e-6) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+function makeStar() {
+  const cy = TREE_TOP + 105;
+  const polygon = starVertices(0, cy, 118, 49);
+  for (let y = cy - 118; y <= cy + 118; y += 21) {
+    for (let x = -118; x <= 118; x += 21) {
+      if (!insidePolygon(x, y, polygon)) continue;
+      for (const z of [-44, 44]) {
+        addPoint({
+          x, y, z,
+          ox: 0, oy: cy, oz: 0,
+          glyph: choose("*+Xx"),
+          hue: rand(51, 38), sat: rand(100, 88), light: rand(90, 67),
+          size: rand(22, 17), alpha: 1, glow: rand(32, 18),
+          spin: 1.08, reveal: 7.8 + rand(0.7), revealDuration: 0.8,
+          entry: "scale", kind: "star", twinkle: rand(2.7, 1.6)
+        });
+      }
+    }
+  }
+  for (let edge = 0; edge < polygon.length; edge++) {
+    const a = polygon[edge], b = polygon[(edge + 1) % polygon.length];
+    for (let i = 0; i <= 6; i++) {
+      const f = i / 6;
+      for (let z = -40; z <= 40; z += 30) {
+        addPoint({
+          x: a[0] + (b[0] - a[0]) * f,
+          y: a[1] + (b[1] - a[1]) * f,
+          z,
+          ox: 0, oy: cy, oz: 0,
+          glyph: choose("*+"),
+          hue: 44, sat: 98, light: rand(94, 74), size: 20,
+          alpha: 1, glow: 28, spin: 1.08,
+          reveal: 8.0 + edge * 0.04 + f * 0.12, revealDuration: 0.62,
+          entry: "scale", kind: "star-edge", twinkle: 2.4
+        });
+      }
+    }
+  }
+
+  // ASCII rays around the star, also with 3D depth.
+  for (let ray = 0; ray < 18; ray++) {
+    const angle = ray / 18 * TAU;
+    const length = ray % 2 ? rand(175, 130) : rand(235, 180);
+    for (let i = 1; i <= 6; i++) {
+      const f = i / 6;
+      addPoint({
+        x: Math.cos(angle) * (125 + f * (length - 125)),
+        y: cy + Math.sin(angle) * (125 + f * (length - 125)),
+        z: rand(70, -70),
+        ox: 0, oy: cy, oz: 0,
+        glyph: choose("*+.'"), hue: rand(51, 38), sat: 96, light: rand(91, 67),
+        size: rand(18, 12), alpha: 0.88 - f * 0.38, glow: rand(22, 8),
+        spin: 1.08, reveal: 8.35 + f * 0.55, revealDuration: 0.55,
+        entry: "scale", kind: "star-ray", twinkle: rand(3.2, 1.8)
+      });
+    }
+  }
+}
+
+function addBox(cx, cy, cz, w, h, d, hue, accentHue, reveal, index) {
+  const spacing = 34;
+  const chars = "[]{}#@+=MERRYXMAS";
+  const accent = "*+X#";
+  const addSurfacePoint = (x, y, z, ribbon = false) => addPoint({
+    x, y, z, ox: cx, oy: cy, oz: cz,
+    glyph: choose(ribbon ? accent : chars),
+    hue: ribbon ? accentHue : hue + rand(8, -8),
+    sat: ribbon ? 98 : rand(96, 75),
+    light: ribbon ? rand(87, 68) : rand(67, 43),
+    size: ribbon ? rand(20, 16) : rand(18, 14),
+    alpha: 1, glow: ribbon ? rand(19, 10) : 4,
+    spin: 0.94 + index * 0.025,
+    reveal: reveal + rand(0.42), revealDuration: 0.72,
+    entry: "scale", kind: ribbon ? "gift-ribbon" : "gift",
+    twinkle: ribbon ? rand(2.8, 1.5) : 1.1
+  });
+
+  for (let y = cy - h / 2; y <= cy + h / 2 + 1; y += spacing) {
+    for (let x = cx - w / 2; x <= cx + w / 2 + 1; x += spacing) {
+      addSurfacePoint(x, y, cz - d / 2, Math.abs(x - cx) < spacing * 0.58);
+      addSurfacePoint(x, y, cz + d / 2, Math.abs(x - cx) < spacing * 0.58);
+    }
+    for (let z = cz - d / 2; z <= cz + d / 2 + 1; z += spacing) {
+      addSurfacePoint(cx - w / 2, y, z, Math.abs(z - cz) < spacing * 0.58);
+      addSurfacePoint(cx + w / 2, y, z, Math.abs(z - cz) < spacing * 0.58);
+    }
+  }
+  for (let z = cz - d / 2; z <= cz + d / 2 + 1; z += spacing) {
+    for (let x = cx - w / 2; x <= cx + w / 2 + 1; x += spacing) {
+      const ribbon = Math.abs(x - cx) < spacing * 0.58 || Math.abs(z - cz) < spacing * 0.58;
+      addSurfacePoint(x, cy + h / 2, z, ribbon);
+    }
+  }
+
+  // Two 3D ASCII bow loops above each box.
+  for (const side of [-1, 1]) {
+    for (let i = 0; i < 22; i++) {
+      const a = i / 22 * TAU;
+      addSurfacePoint(
+        cx + side * 28 + Math.cos(a) * 35,
+        cy + h / 2 + 22 + Math.sin(a) * 20,
+        cz + d / 2 + Math.sin(a * 2) * 14,
+        true
+      );
+    }
+  }
+}
+
+function makeGifts() {
+  addBox(-382, BASE_Y + 51, 118, 164, 120, 124, 2, 43, 9.25, 0);
+  addBox(368, BASE_Y + 43, 126, 170, 108, 132, 212, 45, 9.65, 1);
+  addBox(-286, BASE_Y + 35, -292, 144, 98, 118, 292, 42, 10.05, 2);
+  addBox(356, BASE_Y + 32, -286, 140, 94, 112, 33, 5, 10.42, 3);
+}
+
+function makeSnow() {
+  for (let i = 0; i < 320; i++) {
+    const depth = random();
+    snow.push({
+      x: rand(W + 180, -90),
+      y: rand(H + 160, -160),
+      depth,
+      speed: rand(48, 12) * (0.45 + depth),
+      drift: rand(25, -25),
+      phase: rand(TAU),
+      glyph: choose(CONFIG.snowGlyphs),
+      size: rand(18, 6) * (0.62 + depth * 0.7),
+      alpha: rand(0.9, 0.18) * (0.45 + depth * 0.55)
+    });
+  }
+  for (let i = 0; i < 72; i++) {
+    const angle = rand(TAU);
+    const radius = rand(340, 120);
+    finaleSparks.push({
+      angle, radius,
+      speed: rand(76, 25),
+      phase: rand(TAU),
+      glyph: choose("*+.'"),
+      size: rand(21, 10),
+      hue: rand(55, 36)
+    });
+  }
+}
+
+makeTree();
+makeTrunkAndRoots();
+makeSpiral();
+makeStar();
+makeGifts();
+makeSnow();
+
+function buildGlyphAtlas() {
+  const rows = Math.ceil(scene.length / GLYPH_ATLAS_COLS);
+  glyphAtlas = document.createElement("canvas");
+  glyphAtlas.width = GLYPH_ATLAS_COLS * GLYPH_CELL;
+  glyphAtlas.height = rows * GLYPH_CELL;
+  const a = glyphAtlas.getContext("2d", { alpha: true });
+  a.clearRect(0, 0, glyphAtlas.width, glyphAtlas.height);
+  a.textAlign = "center";
+  a.textBaseline = "middle";
+  a.font = `800 ${GLYPH_BASE_SIZE}px ${CONFIG.fontFamily}`;
+  for (let i = 0; i < scene.length; i++) {
+    const p = scene[i];
+    const col = i % GLYPH_ATLAS_COLS;
+    const row = Math.floor(i / GLYPH_ATLAS_COLS);
+    p.atlasX = col * GLYPH_CELL;
+    p.atlasY = row * GLYPH_CELL;
+    a.fillStyle = hsla(p.hue, p.sat, Math.min(94, p.light + (p.glow > 0 ? 5 : 0)), 1);
+    a.fillText(p.glyph, p.atlasX + GLYPH_CELL / 2, p.atlasY + GLYPH_CELL / 2 + 1);
+  }
+}
+buildGlyphAtlas();
+
+function entryProgress(p, t) {
+  return smoothstep((t - p.reveal) / p.revealDuration);
+}
+
+function transformAndProject(p, t, manualYaw) {
+  let r = entryProgress(p, t);
+  if (r <= 0.001) return null;
+  if (p.entry === "scale") r = easeOutBack(r);
+
+  let x = p.x, y = p.y, z = p.z;
+  if (p.entry === "grow") {
+    x *= r;
+    z *= r;
+    y = BASE_Y + (y - BASE_Y) * r;
+  } else if (p.entry === "root") {
+    x *= r;
+    z *= r;
+    y = BASE_Y + (y - BASE_Y) * r;
+  } else if (p.entry === "scale") {
+    x = p.ox + (x - p.ox) * r;
+    y = p.oy + (y - p.oy) * r;
+    z = p.oz + (z - p.oz) * r;
+  }
+
+  const layerWobble = 0.018 * Math.sin(t * 0.72 + p.phase);
+  const angle = t * CONFIG.rotationSpeed * p.spin + manualYaw + p.offset + layerWobble;
+  const ca = Math.cos(angle), sa = Math.sin(angle);
+  const xr = x * ca + z * sa;
+  const zr = -x * sa + z * ca;
+
+  const pitch = -0.035;
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const yr = y * cp - zr * sp;
+  const z2 = y * sp + zr * cp;
+  const cameraDistance = 1880;
+  const focal = 1360;
+  const denom = cameraDistance - z2;
+  if (denom < 280) return null;
+  const perspective = focal / denom;
+  const breathe = 1 + 0.012 * Math.sin(t * 0.62);
+  const sx = W * 0.5 + xr * perspective * breathe;
+  const sy = 965 - yr * perspective * breathe;
+
+  if (sx < -80 || sx > W + 80 || sy < -80 || sy > H + 80) return null;
+  return { sx, sy, depth: z2, perspective, reveal: clamp(r), xr, yr };
+}
+
+function drawBackground(t) {
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, CONFIG.backgroundTop);
+  bg.addColorStop(0.54, "#030817");
+  bg.addColorStop(1, CONFIG.backgroundBottom);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  const halo = ctx.createRadialGradient(W * 0.5, 890, 20, W * 0.5, 930, 760);
+  halo.addColorStop(0, "rgba(34,146,114,0.10)");
+  halo.addColorStop(0.55, "rgba(8,55,77,0.08)");
+  halo.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = halo;
+  ctx.fillRect(0, 0, W, H);
+
+  // Faint ASCII horizon; it gives the roots a visible ground plane.
+  ctx.save();
+  ctx.font = `500 13px ${CONFIG.fontFamily}`;
+  ctx.textAlign = "left";
+  ctx.shadowBlur = 0;
+  const groundLine = "_.-+".repeat(36);
+  for (let row = 0; row < 8; row++) {
+    const yy = 1425 + row * 19;
+    const alpha = 0.17 * (1 - row / 9);
+    ctx.fillStyle = `rgba(62,115,139,${alpha})`;
+    const offset = Math.sin(row * 1.7 + t * 0.2) * 3;
+    ctx.fillText(groundLine.slice(row, row + 136), 10 + offset, yy);
+  }
+  ctx.restore();
+}
+
+function drawSnow(t, foreground) {
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (let i = 0; i < snow.length; i += SNOW_STRIDE) {
+    const s = snow[i];
+    const isFront = s.depth > 0.68;
+    if (isFront !== foreground) continue;
+    const y = wrap(s.y + s.speed * t, H + 210) - 105;
+    const x = wrap(s.x + Math.sin(t * 0.46 + s.phase) * s.drift + t * s.drift * 0.09, W + 140) - 70;
+    const pulse = 0.72 + 0.28 * Math.sin(t * 1.35 + s.phase);
+    ctx.font = `600 ${s.size.toFixed(1)}px ${CONFIG.fontFamily}`;
+    ctx.fillStyle = `rgba(226,240,255,${(s.alpha * pulse).toFixed(3)})`;
+    ctx.shadowBlur = 0;
+    ctx.fillText(s.glyph, x, y);
+  }
+  ctx.restore();
+}
+
+function drawScene(t, manualYaw = 0) {
+  const drawList = [];
+  for (let i = 0; i < scene.length; i += SCENE_STRIDE) {
+    const p = scene[i];
+    const tr = transformAndProject(p, t, manualYaw);
+    if (tr) drawList.push({ p, ...tr });
+  }
+  drawList.sort((a, b) => a.depth - b.depth);
+
+  // Paint all luminous glyphs once into a small buffer, then blur/composite
+  // the entire buffer in a single operation. The crisp ASCII pass follows.
+  glowCtx.setTransform(1, 0, 0, 1, 0, 0);
+  glowCtx.clearRect(0, 0, glowCanvas.width, glowCanvas.height);
+  glowCtx.setTransform(0.5 * RENDER_SCALE, 0, 0, 0.5 * RENDER_SCALE, 0, 0);
+  for (const item of drawList) {
+    const p = item.p;
+    if (p.glow <= 0) continue;
+    const front = clamp((item.depth + 650) / 1300);
+    const shimmer = 0.84 + 0.16 * Math.sin(t * p.twinkle + p.phase);
+    const flash = (p.kind.includes("star") || p.kind.includes("gift") || p.kind === "light" || p.kind === "ornament" || p.kind === "red-bulb")
+      ? 0.75 + 0.25 * Math.max(0, Math.sin(t * (p.twinkle + 0.9) + p.phase * 1.7))
+      : 1;
+    const movingSpark = p.kind === "light" ? 0.72 + 0.46 * Math.pow(Math.max(0, Math.sin(t * 3.1 - p.phase * 1.9)), 7) : 1;
+    const depthShade = 0.62 + front * 0.46;
+    const alpha = clamp(p.alpha * item.reveal * depthShade * shimmer * flash * movingSpark, 0, 1);
+    const fontSize = clamp(p.size * item.perspective * 1.43, 7, 27);
+    const d = GLYPH_CELL * fontSize / GLYPH_BASE_SIZE;
+    glowCtx.globalAlpha = alpha * 0.58;
+    glowCtx.drawImage(
+      glyphAtlas, p.atlasX, p.atlasY, GLYPH_CELL, GLYPH_CELL,
+      item.sx - d / 2, item.sy - d / 2, d, d
+    );
+  }
+  glowCtx.globalAlpha = 1;
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  ctx.globalAlpha = exportMode ? 0.92 : 0.3;
+  ctx.filter = exportMode ? "blur(13px)" : "none";
+  ctx.drawImage(glowCanvas, 0, 0, W, H);
+  ctx.filter = "none";
+  ctx.restore();
+
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const item of drawList) {
+    const p = item.p;
+    const front = clamp((item.depth + 650) / 1300);
+    const shimmer = 0.84 + 0.16 * Math.sin(t * p.twinkle + p.phase);
+    const flash = (p.kind.includes("star") || p.kind.includes("gift") || p.kind === "light" || p.kind === "ornament" || p.kind === "red-bulb")
+      ? 0.75 + 0.25 * Math.max(0, Math.sin(t * (p.twinkle + 0.9) + p.phase * 1.7))
+      : 1;
+    const movingSpark = p.kind === "light" ? 0.72 + 0.46 * Math.pow(Math.max(0, Math.sin(t * 3.1 - p.phase * 1.9)), 7) : 1;
+    const depthShade = 0.62 + front * 0.46;
+    const alpha = clamp(p.alpha * item.reveal * depthShade * shimmer * flash * movingSpark, 0, 1);
+    const fontSize = clamp(p.size * item.perspective * 1.43, 7, 27);
+    const d = GLYPH_CELL * fontSize / GLYPH_BASE_SIZE;
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(
+      glyphAtlas, p.atlasX, p.atlasY, GLYPH_CELL, GLYPH_CELL,
+      item.sx - d / 2, item.sy - d / 2, d, d
+    );
+
+    // Bright ASCII lights get a crisp white-gold core.
+    if ((p.kind === "light" || p.kind.includes("star") || p.kind === "gift-ribbon" || p.kind === "red-bulb") && alpha > 0.3) {
+      const core = d * 0.72;
+      ctx.globalCompositeOperation = "screen";
+      ctx.globalAlpha = alpha * 0.58;
+      ctx.drawImage(
+        glyphAtlas, p.atlasX, p.atlasY, GLYPH_CELL, GLYPH_CELL,
+        item.sx - core / 2, item.sy - core / 2, core, core
+      );
+      ctx.globalCompositeOperation = "source-over";
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.restore();
+}
+
+function drawFinaleSparks(t) {
+  const progress = clamp((t - 13.8) / 2.2);
+  if (progress <= 0) return;
+  const starY = 965 - (TREE_TOP + 105) * (1360 / 1880);
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const s of finaleSparks) {
+    const pulse = Math.max(0, Math.sin((t - 13.8) * 2.15 + s.phase));
+    const radius = s.radius + Math.sin(t * 0.5 + s.phase) * 18;
+    const x = W * 0.5 + Math.cos(s.angle + t * 0.07) * radius;
+    const y = starY + Math.sin(s.angle + t * 0.07) * radius * 0.72;
+    ctx.font = `700 ${s.size}px ${CONFIG.fontFamily}`;
+    ctx.fillStyle = hsla(s.hue, 98, 82, progress * (0.16 + pulse * 0.68));
+    ctx.shadowBlur = 0;
+    ctx.fillText(s.glyph, x, y);
+  }
+  ctx.restore();
+}
+
+function drawSpacedText(text, x, y, fontSize, spacing, color, glow, alpha = 1) {
+  ctx.save();
+  ctx.font = `700 ${fontSize}px ${CONFIG.fontFamily}`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  const widths = [...text].map(ch => ctx.measureText(ch).width);
+  const total = widths.reduce((a, b) => a + b, 0) + spacing * Math.max(0, text.length - 1);
+  let cursor = x - total / 2;
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = glow;
+  ctx.globalAlpha = alpha;
+  [...text].forEach((ch, i) => {
+    ctx.fillText(ch, cursor, y);
+    cursor += widths[i] + spacing;
+  });
+  ctx.restore();
+}
+
+function drawGreeting(t) {
+  const line1Start = 11.2;
+  const line2Start = 12.8;
+  const line1Count = Math.floor(clamp((t - line1Start) / 2.2) * CONFIG.greeting.length + 0.001);
+  const line2Count = Math.floor(clamp((t - line2Start) / 2.8) * CONFIG.dedication.length + 0.001);
+  const line1 = CONFIG.greeting.slice(0, line1Count);
+  const line2 = CONFIG.dedication.slice(0, line2Count);
+  const pulse = 0.86 + 0.14 * Math.sin(t * 1.2);
+
+  const ruleProgress = smoothstep((t - 10.8) / 1.6);
+  const ruleChars = "+--------------------------------------+";
+  const ruleCount = Math.floor(ruleProgress * ruleChars.length);
+  drawSpacedText(ruleChars.slice(0, ruleCount), W / 2, 1533, 20, 1.5, "rgba(219,181,81,.54)", 7, ruleProgress);
+
+  if (line1) drawSpacedText(line1, W / 2, 1604, 48, 8.5, hsla(43, 92, 77, 1), 20 * pulse, pulse);
+  if (line2) drawSpacedText(line2, W / 2, 1671, 18, 4.2, "rgba(220,238,242,.88)", 8, 0.94);
+
+  const footerProgress = smoothstep((t - 14.2) / 1.4);
+  if (footerProgress > 0) {
+    drawSpacedText("ASCII WINTER // 20 SECOND EDITION", W / 2, 1740, 13, 3.2, "rgba(133,205,200,.58)", 5, footerProgress * 0.8);
+  }
+}
+
+function drawTopLabel(t) {
+  const a = smoothstep(t / 1.4) * 0.55;
+  ctx.save();
+  ctx.font = `600 13px ${CONFIG.fontFamily}`;
+  ctx.letterSpacing = "2px";
+  ctx.textAlign = "center";
+  ctx.fillStyle = `rgba(185,220,222,${a})`;
+  ctx.shadowBlur = 5;
+  ctx.shadowColor = "rgba(67,207,177,.55)";
+  ctx.fillText("ASCII // CHRISTMAS // 2026", W / 2, 82);
+  ctx.restore();
+}
+
+function drawVignette() {
+  const vignette = ctx.createRadialGradient(W / 2, H * 0.47, H * 0.12, W / 2, H * 0.5, H * 0.72);
+  vignette.addColorStop(0, "rgba(0,0,0,0)");
+  vignette.addColorStop(0.74, "rgba(0,0,0,0.04)");
+  vignette.addColorStop(1, "rgba(0,0,0,0.56)");
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function render(t, manualYaw = 0) {
+  t = clamp(t, 0, CONFIG.duration);
+  ctx.setTransform(RENDER_SCALE, 0, 0, RENDER_SCALE, 0, 0);
+  drawBackground(t);
+  drawSnow(t, false);
+  drawScene(t, manualYaw);
+  drawFinaleSparks(t);
+  drawSnow(t, true);
+  drawTopLabel(t);
+  drawGreeting(t);
+  drawVignette();
+}
+
+let startedAt = performance.now();
+let pausedAt = 0;
+let paused = false;
+let manualYaw = 0;
+let dragStartX = 0;
+let dragStartYaw = 0;
+let dragging = false;
+let currentTime = 0;
+
+function animationFrame(now) {
+  if (!paused) {
+    currentTime = Math.min((now - startedAt) / 1000, CONFIG.duration);
+  }
+  render(currentTime, manualYaw);
+  if (!paused) requestAnimationFrame(animationFrame);
+}
+
+function replay() {
+  startedAt = performance.now();
+  currentTime = 0;
+  paused = false;
+  document.getElementById("pause").textContent = "PAUSE";
+  requestAnimationFrame(animationFrame);
+}
+function togglePause() {
+  paused = !paused;
+  const button = document.getElementById("pause");
+  if (paused) {
+    pausedAt = performance.now();
+    button.textContent = "PLAY";
+  } else {
+    startedAt += performance.now() - pausedAt;
+    button.textContent = "PAUSE";
+    requestAnimationFrame(animationFrame);
+  }
+}
+function savePng() {
+  const link = document.createElement("a");
+  link.download = "ascii-christmas-tree.png";
+  link.href = canvas.toDataURL("image/png");
+  link.click();
+}
+
+canvas.addEventListener("pointerdown", (event) => {
+  if (exportMode) return;
+  dragging = true;
+  dragStartX = event.clientX;
+  dragStartYaw = manualYaw;
+  canvas.setPointerCapture(event.pointerId);
+});
+canvas.addEventListener("pointermove", (event) => {
+  if (!dragging || exportMode) return;
+  manualYaw = dragStartYaw + (event.clientX - dragStartX) * 0.008;
+  if (paused) render(currentTime, manualYaw);
+});
+canvas.addEventListener("pointerup", () => { dragging = false; });
+canvas.addEventListener("pointercancel", () => { dragging = false; });
+
+document.getElementById("replay").addEventListener("click", replay);
+document.getElementById("pause").addEventListener("click", togglePause);
+document.getElementById("save").addEventListener("click", savePng);
+window.addEventListener("keydown", (event) => {
+  if (event.code === "Space") { event.preventDefault(); togglePause(); }
+  if (event.key.toLowerCase() === "r") replay();
+  if (event.key.toLowerCase() === "s") savePng();
+});
+setTimeout(() => { const h = document.getElementById("hint"); if (h) h.style.opacity = "0"; }, 6500);
+
+// Deterministic frame API used by render_video.py.
+window.renderExportFrame = (frame) => {
+  currentTime = clamp(Number(frame) / CONFIG.fps, 0, CONFIG.duration);
+  render(currentTime, 0);
+  return currentTime;
+};
+window.__ASCIITREE_CONFIG = CONFIG;
+window.__ASCIITREE_READY = true;
+
+if (exportMode) {
+  render(0, 0);
+} else if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  currentTime = 16;
+  paused = true;
+  render(currentTime, 0);
+  document.getElementById("pause").textContent = "PLAY";
+} else {
+  requestAnimationFrame(animationFrame);
+}
+</script>
+</body>
+</html>
