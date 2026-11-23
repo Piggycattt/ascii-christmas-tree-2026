@@ -1,4 +1,9 @@
 .render_frames/
+.python_render_frames/
+previews/motion_frames/
 *.mp4
+!ASCII-Christmas-Tree-20s-1080x1920.mp4
+!ASCII-Christmas-Tree-web.mp4
 capture-test-*.jpg
 __pycache__/
+
