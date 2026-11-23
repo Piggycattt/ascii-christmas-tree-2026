@@ -4,7 +4,7 @@
 
 - 树、星星、树干、树根和礼物均由 ASCII 字母与符号组成
 - 绿色/青色多层树体会绕垂直轴旋转
-- 金色螺旋灯带会逐段点亮并流动闪烁
+- 金色螺旋灯带会逐段点亮并流动闪烁，并悬挂红色 ASCII 灯球
 - 星星和礼物拥有真实 3D 厚度
 - 保留飘雪、祝福文字和 20 秒完整时间线
 - 网页支持鼠标/触控拖动旋转
@@ -39,8 +39,8 @@ dedication: "TO THE ONE I WANT TO SPEND CHRISTMAS WITH",
 ```js
 rotationSpeed: 0.34,     // 转速
 seed: 20261225,          // 随机造型种子
-treeHeight: 1210,        // 树高
-treeRadius: 520,         // 树冠宽度
+treeHeight: 1280,        // 树高
+treeRadius: 575,         // 树冠宽度
 ```
 
 ## 重新导出 20 秒 MP4
