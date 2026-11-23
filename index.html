@@ -129,8 +129,8 @@ const CONFIG = {
   duration: 20,
   seed: 20261225,
   rotationSpeed: 0.34,
-  treeHeight: 1210,
-  treeRadius: 520,
+  treeHeight: 1280,
+  treeRadius: 575,
   greeting: "MERRY CHRISTMAS 2026",
   dedication: "TO THE ONE I WANT TO SPEND CHRISTMAS WITH",
   backgroundTop: "#02040d",
@@ -223,7 +223,7 @@ function makeTree() {
     const y = BASE_Y + 70 + u * (CONFIG.treeHeight - 120);
     const tier = Math.min(8, Math.floor(u * 9));
     const scallop = 0.88 + 0.12 * Math.cos(u * Math.PI * 18 + 0.35);
-    const radiusMax = Math.pow(1 - u, 0.72) * CONFIG.treeRadius * scallop + 10;
+    const radiusMax = Math.pow(1 - u, 0.66) * CONFIG.treeRadius * scallop + 10;
     const shell = random() < 0.69;
     const radial = shell ? rand(1, 0.72) : Math.sqrt(random()) * 0.74;
     const theta = rand(TAU);
@@ -254,7 +254,7 @@ function makeTree() {
   for (let tier = 0; tier < 10; tier++) {
     const u = tier / 10;
     const y0 = BASE_Y + 105 + tier * 105;
-    const tierRadius = Math.pow(1 - u, 0.72) * CONFIG.treeRadius * 1.02;
+    const tierRadius = Math.pow(1 - u, 0.67) * CONFIG.treeRadius * 1.02;
     const armCount = 9 + (tier % 3);
     for (let arm = 0; arm < armCount; arm++) {
       const theta = arm / armCount * TAU + rand(0.16, -0.16);
@@ -331,7 +331,7 @@ function makeSpiral() {
   for (let i = 0; i < count; i++) {
     const u = i / (count - 1);
     const y = BASE_Y + 145 + u * (CONFIG.treeHeight - 235);
-    const radius = Math.pow(1 - u, 0.72) * CONFIG.treeRadius * 1.055 + 18;
+    const radius = Math.pow(1 - u, 0.67) * CONFIG.treeRadius * 1.055 + 18;
     const theta = u * TAU * 5.45 + 0.5;
     for (let layer = 0; layer < 2; layer++) {
       const spread = layer ? 10 : -5;
@@ -351,6 +351,52 @@ function makeSpiral() {
         kind: "light",
         phase: u * 19 + layer,
         twinkle: rand(2.3, 1.4)
+      });
+    }
+
+    // Red ASCII bulbs hang from the golden spiral. Each one is an extruded
+    // character cluster, so it keeps 3D thickness while the tree rotates.
+    if (i % 16 === 6 && u > 0.07 && u < 0.95) {
+      const nx = Math.cos(theta), nz = Math.sin(theta);
+      const tx = -Math.sin(theta), tz = Math.cos(theta);
+      const bulbRadius = radius + 15;
+      const bulbY = y - 27;
+      const bulbReveal = 5.15 + u * 2.45;
+
+      addPoint({
+        x: nx * (radius + 5), y: y - 8, z: nz * (radius + 5),
+        glyph: "|", hue: 43, sat: 98, light: 82,
+        size: 17, alpha: 1, glow: 15, spin: 1,
+        reveal: bulbReveal - 0.12, revealDuration: 0.3,
+        entry: "fade", kind: "light", twinkle: 2.1
+      });
+
+      for (let b = 0; b < 9; b++) {
+        const a = b / 9 * TAU;
+        const tangentOffset = Math.cos(a) * 13;
+        const verticalOffset = Math.sin(a) * 14;
+        const depthOffset = b % 2 ? 7 : -7;
+        addPoint({
+          x: nx * (bulbRadius + depthOffset) + tx * tangentOffset,
+          y: bulbY + verticalOffset,
+          z: nz * (bulbRadius + depthOffset) + tz * tangentOffset,
+          glyph: b % 3 === 0 ? "O" : choose("o@0"),
+          hue: rand(8, -3), sat: rand(100, 91), light: rand(72, 52),
+          size: rand(24, 19), alpha: 1, glow: rand(22, 14),
+          spin: 1, reveal: bulbReveal + b * 0.018,
+          revealDuration: 0.42, entry: "fade", kind: "red-bulb",
+          phase: u * 23 + b * 0.7, twinkle: rand(3.0, 1.8)
+        });
+      }
+
+      addPoint({
+        x: nx * (bulbRadius + 7) - tx * 5,
+        y: bulbY + 7,
+        z: nz * (bulbRadius + 7) - tz * 5,
+        glyph: "*", hue: 12, sat: 90, light: 94,
+        size: 14, alpha: 1, glow: 24, spin: 1,
+        reveal: bulbReveal + 0.2, revealDuration: 0.35,
+        entry: "fade", kind: "red-bulb", twinkle: 3.4
       });
     }
   }
@@ -665,7 +711,7 @@ function drawScene(t, manualYaw = 0) {
     if (p.glow <= 0) continue;
     const front = clamp((item.depth + 650) / 1300);
     const shimmer = 0.84 + 0.16 * Math.sin(t * p.twinkle + p.phase);
-    const flash = (p.kind.includes("star") || p.kind.includes("gift") || p.kind === "light" || p.kind === "ornament")
+    const flash = (p.kind.includes("star") || p.kind.includes("gift") || p.kind === "light" || p.kind === "ornament" || p.kind === "red-bulb")
       ? 0.75 + 0.25 * Math.max(0, Math.sin(t * (p.twinkle + 0.9) + p.phase * 1.7))
       : 1;
     const movingSpark = p.kind === "light" ? 0.72 + 0.46 * Math.pow(Math.max(0, Math.sin(t * 3.1 - p.phase * 1.9)), 7) : 1;
@@ -695,7 +741,7 @@ function drawScene(t, manualYaw = 0) {
     const p = item.p;
     const front = clamp((item.depth + 650) / 1300);
     const shimmer = 0.84 + 0.16 * Math.sin(t * p.twinkle + p.phase);
-    const flash = (p.kind.includes("star") || p.kind.includes("gift") || p.kind === "light" || p.kind === "ornament")
+    const flash = (p.kind.includes("star") || p.kind.includes("gift") || p.kind === "light" || p.kind === "ornament" || p.kind === "red-bulb")
       ? 0.75 + 0.25 * Math.max(0, Math.sin(t * (p.twinkle + 0.9) + p.phase * 1.7))
       : 1;
     const movingSpark = p.kind === "light" ? 0.72 + 0.46 * Math.pow(Math.max(0, Math.sin(t * 3.1 - p.phase * 1.9)), 7) : 1;
@@ -710,7 +756,7 @@ function drawScene(t, manualYaw = 0) {
     );
 
     // Bright ASCII lights get a crisp white-gold core.
-    if ((p.kind === "light" || p.kind.includes("star") || p.kind === "gift-ribbon") && alpha > 0.3) {
+    if ((p.kind === "light" || p.kind.includes("star") || p.kind === "gift-ribbon" || p.kind === "red-bulb") && alpha > 0.3) {
       const core = d * 0.72;
       ctx.globalCompositeOperation = "screen";
       ctx.globalAlpha = alpha * 0.58;
